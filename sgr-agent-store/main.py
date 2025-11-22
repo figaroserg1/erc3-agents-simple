@@ -11,8 +11,9 @@ MODEL_ID = "gpt-4o"
 res = core.start_session(
     benchmark="store",
     workspace="my",
-    name="Simple SGR Agent",
-    architecture="NextStep SGR Agent with OpenAI")
+    name="TaskProfile + NextStep Agent",
+    architecture="Two-phase TaskProfile parser with iterative NextStep router",
+)
 
 status = core.session_status(res.session_id)
 print(f"Session has {len(status.tasks)} tasks")
