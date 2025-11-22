@@ -1,4 +1,5 @@
 import json
+import subprocess
 import time
 from typing import Annotated, List, Union, Literal, Optional
 from annotated_types import MaxLen, MinLen
@@ -24,6 +25,13 @@ class ReportTaskCompletion(BaseModel):
     code: Literal["completed", "failed"]
 
 
+class ExecutePythonSnippet(BaseModel):
+    tool: Literal["run_python_snippet"]
+    code: Annotated[str, MaxLen(2000)] = Field(
+        ..., description="Python code to execute for on-the-fly calculations"
+    )
+
+
 class NextStep(BaseModel):
     current_state: Annotated[str, MaxLen(400)]
     plan_remaining_steps_brief: Annotated[List[str], MinLen(1), MaxLen(5)] = Field(
@@ -32,6 +40,7 @@ class NextStep(BaseModel):
     task_completed: bool
     function: Union[
         ReportTaskCompletion,
+        ExecutePythonSnippet,
         store.Req_ListProducts,
         store.Req_ViewBasket,
         store.Req_ApplyCoupon,
@@ -58,6 +67,7 @@ Rules:
 - ApplyCoupon / RemoveCoupon as needed to test options; only one coupon is active at a time.
 - Call CheckoutBasket only after verifying the basket and discounts.
 - If a task is impossible (missing items, insufficient budget, etc.), report failure explicitly.
+- You can use run_python_snippet to execute short Python calculations (e.g., optimize bundles/discounts).
 """
 
 CLI_RED = "\x1B[31m"
@@ -88,6 +98,30 @@ def truncate_content(content: str, limit: int = 600) -> str:
     if len(content) <= limit:
         return content
     return content[:limit] + "... (truncated)"
+
+
+def run_python_snippet(code: str, timeout: float = 5.0) -> str:
+    """Execute ad-hoc Python code and return combined stdout/stderr."""
+
+    try:
+        result = subprocess.run(
+            ["python3", "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return "Execution timed out."
+    except Exception as e:  # pragma: no cover - defensive guard
+        return f"Execution failed: {e}"
+
+    output_parts = []
+    if result.stdout:
+        output_parts.append(result.stdout.strip())
+    if result.stderr:
+        output_parts.append(f"stderr:\n{result.stderr.strip()}")
+
+    return "\n".join(output_parts) if output_parts else "(no output)"
 
 
 def run_agent(model: str, api: ERC3, task: TaskInfo):
@@ -174,10 +208,14 @@ def run_agent(model: str, api: ERC3, task: TaskInfo):
 
         # now execute the tool by dispatching command to our handler
         try:
-            result = store_api.dispatch(job.function)
-            txt_dict = result.model_dump(exclude_none=True, exclude_unset=True)
-            txt = json.dumps(txt_dict, ensure_ascii=False)
-            print(f"{CLI_GREEN}OUT{CLI_CLR}: {txt}")
+            if isinstance(job.function, ExecutePythonSnippet):
+                txt = run_python_snippet(job.function.code)
+                print(f"{CLI_GREEN}OUT{CLI_CLR}: {txt}")
+            else:
+                result = store_api.dispatch(job.function)
+                txt_dict = result.model_dump(exclude_none=True, exclude_unset=True)
+                txt = json.dumps(txt_dict, ensure_ascii=False)
+                print(f"{CLI_GREEN}OUT{CLI_CLR}: {txt}")
         except ApiException as e:
             txt = e.detail
             # print to console as ascii red
